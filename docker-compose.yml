@@ -1,0 +1,136 @@
+name: guide-generator
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: guide
+      POSTGRES_PASSWORD: guide
+      POSTGRES_DB: guide
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U guide -d guide"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS}
+      STORAGE_DIR: ${STORAGE_DIR}
+      MAX_RECORDING_MB: ${MAX_RECORDING_MB}
+      MAX_FRAMES: ${MAX_FRAMES}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      AI_PROVIDER: ${AI_PROVIDER:-openai}
+      TRANSCRIBE_LANGUAGE: ${TRANSCRIBE_LANGUAGE}
+      OPENAI_STT_MODEL: ${OPENAI_STT_MODEL}
+      OPENAI_VISION_MODEL: ${OPENAI_VISION_MODEL}
+      OPENAI_LLM_MODEL: ${OPENAI_LLM_MODEL}
+      # Phase E: sanitizer
+      SANITIZE_ENABLED: ${SANITIZE_ENABLED:-false}
+      SANITIZE_STRICT_MODE: ${SANITIZE_STRICT_MODE:-false}
+      SANITIZE_PASSWORD_MIN_LENGTH: ${SANITIZE_PASSWORD_MIN_LENGTH:-4}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./apps/api:/app
+      - ./data/storage:/data/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    command: python -m app.worker_main
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      STORAGE_DIR: ${STORAGE_DIR}
+      MAX_RECORDING_MB: ${MAX_RECORDING_MB}
+      MAX_FRAMES: ${MAX_FRAMES}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      AI_PROVIDER: ${AI_PROVIDER:-openai}
+      TRANSCRIBE_LANGUAGE: ${TRANSCRIBE_LANGUAGE}
+      OPENAI_STT_MODEL: ${OPENAI_STT_MODEL}
+      OPENAI_VISION_MODEL: ${OPENAI_VISION_MODEL}
+      OPENAI_LLM_MODEL: ${OPENAI_LLM_MODEL}
+      # Phase B: per-capability provider selection. Defaults preserve
+      # current OpenAI behavior — local-ai is reachable but not yet used.
+      # The hard depends_on local-ai is intentionally absent: local-ai is
+      # optional until STT_PROVIDER=local or OCR_PROVIDER=local is set
+      # (Phase C / D). This avoids blocking the worker on a service it
+      # does not currently call.
+      STT_PROVIDER: ${STT_PROVIDER:-openai}
+      OCR_PROVIDER: ${OCR_PROVIDER:-openai}
+      GUIDE_LLM_PROVIDER: ${GUIDE_LLM_PROVIDER:-openai}
+      LOCAL_AI_BASE_URL: ${LOCAL_AI_BASE_URL:-http://local-ai:9000}
+      LOCAL_AI_TIMEOUT_SECONDS: ${LOCAL_AI_TIMEOUT_SECONDS:-600}
+      # Phase E: sanitizer
+      SANITIZE_ENABLED: ${SANITIZE_ENABLED:-false}
+      SANITIZE_STRICT_MODE: ${SANITIZE_STRICT_MODE:-false}
+      SANITIZE_PASSWORD_MIN_LENGTH: ${SANITIZE_PASSWORD_MIN_LENGTH:-4}
+    volumes:
+      - ./apps/api:/app
+      - ./data/storage:/data/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  local-ai:
+    build:
+      context: ./apps/local-ai
+      dockerfile: Dockerfile
+    command: uvicorn app.main:app --host 0.0.0.0 --port 9000
+    # Internal-only: NO `ports:` mapping. Reachable inside the compose
+    # network as http://local-ai:9000.
+    expose:
+      - "9000"
+    environment:
+      STORAGE_ROOT: /data/storage
+      STT_ENGINE: ${LOCAL_AI_STT_ENGINE:-stub}
+      OCR_ENGINE: ${LOCAL_AI_OCR_ENGINE:-stub}
+      WHISPER_MODEL: ${LOCAL_AI_WHISPER_MODEL:-small}
+      WHISPER_DEVICE: ${LOCAL_AI_WHISPER_DEVICE:-cpu}
+      WHISPER_COMPUTE_TYPE: ${LOCAL_AI_WHISPER_COMPUTE_TYPE:-int8}
+      WHISPER_LANGUAGE: ${LOCAL_AI_WHISPER_LANGUAGE:-}
+      OCR_LANGUAGE: ${LOCAL_AI_OCR_LANGUAGE:-eng+ita}
+      OCR_LANG: ${LOCAL_AI_OCR_LANG:-eng+ita}
+      OCR_MIN_CONFIDENCE: ${LOCAL_AI_OCR_MIN_CONFIDENCE:-0.0}
+      OCR_MAX_FRAMES_PER_REQUEST: ${LOCAL_AI_OCR_MAX_FRAMES_PER_REQUEST:-200}
+    volumes:
+      # Read-only access to the shared storage directory. The api / worker
+      # writes; local-ai only reads. Enforced at the kernel mount level.
+      - ./data/storage:/data/storage:ro
+    healthcheck:
+      # Python stdlib only — no curl needed; keeps the image slim.
+      test: ["CMD", "python", "-c",
+             "import urllib.request, sys; r = urllib.request.urlopen('http://localhost:9000/health', timeout=3); sys.exit(0 if r.status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    command: npm run dev
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
+      NODE_ENV: development
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - api
