@@ -45,13 +45,31 @@ export interface GuideMetadata {
     source_duration_sec?: number | null;
 }
 
+/** A free-form section used by non-procedural document types (schema v1.1+). */
+export interface GuideSection {
+    kind: string;
+    title: string;
+    content?: string;
+    items?: string[];
+    steps?: GuideStep[];
+    warnings?: string[];
+    notes?: string[];
+}
+
 export interface Guide {
     schema_version: string;
+    /** Adaptive field (schema v1.1+). Absent in older guides — assume "procedural". */
+    document_type?: string;
+    /** Adaptive field (schema v1.1+). */
+    intended_audience?: string;
+    /** Adaptive sections for non-procedural document types (schema v1.1+). */
+    sections?: GuideSection[];
     title: string;
     summary: string;
     estimated_duration_minutes?: number | null;
     prerequisites: string[];
     tools_or_systems: string[];
+    /** Now optional (default []). Old procedural guides always have steps. */
     steps: GuideStep[];
     warnings: string[];
     notes: string[];

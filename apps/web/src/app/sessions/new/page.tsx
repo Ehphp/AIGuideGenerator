@@ -1,10 +1,18 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Recorder } from "@/components/recorder/Recorder";
 import { Uploader } from "@/components/uploader/Uploader";
+
+// Recorder uses browser-only APIs (getDisplayMedia, MediaRecorder).
+// ssr:false prevents the server pre-render from producing a different DOM
+// than the client (hydration mismatch).
+const Recorder = dynamic(
+    () => import("@/components/recorder/Recorder").then((m) => m.Recorder),
+    { ssr: false },
+);
 import { createSession, uploadMedia } from "@/lib/apiClient";
 import type { RecordedMedia } from "@/hooks/useScreenRecorder";
 
@@ -88,8 +96,8 @@ export default function NewSessionPage() {
                     onClick={() => setMode("record")}
                     disabled={submitting}
                     className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium ${mode === "record"
-                            ? "border-foreground text-foreground"
-                            : "border-transparent text-muted-foreground hover:text-foreground"
+                        ? "border-foreground text-foreground"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
                         }`}
                 >
                     Record screen
@@ -99,8 +107,8 @@ export default function NewSessionPage() {
                     onClick={() => setMode("upload")}
                     disabled={submitting}
                     className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium ${mode === "upload"
-                            ? "border-foreground text-foreground"
-                            : "border-transparent text-muted-foreground hover:text-foreground"
+                        ? "border-foreground text-foreground"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
                         }`}
                 >
                     Upload file

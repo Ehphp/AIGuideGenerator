@@ -3,6 +3,7 @@ import { GuideHeader } from "./GuideHeader";
 import { GuideTableOfContents } from "./GuideTableOfContents";
 import { GuidePrerequisites } from "./GuidePrerequisites";
 import { GuideProcedure } from "./GuideProcedure";
+import { GuideSectionCard } from "./GuideSectionCard";
 import { GuideTroubleshooting } from "./GuideTroubleshooting";
 import { GuideCallout } from "./GuideCallout";
 import { GuideAbout } from "./GuideAbout";
@@ -40,6 +41,8 @@ export function GuideDocument({ guide, session }: GuideDocumentProps) {
         guide.prerequisites.length > 0 || guide.tools_or_systems.length > 0;
     const hasWarnings = guide.warnings.length > 0;
     const hasNotes = guide.notes.length > 0;
+    const hasSteps = (guide.steps?.length ?? 0) > 0;
+    const hasSections = (guide.sections?.length ?? 0) > 0;
 
     return (
         <div className="flex flex-col gap-0">
@@ -89,10 +92,23 @@ export function GuideDocument({ guide, session }: GuideDocumentProps) {
                             </Section>
                         )}
 
-                        {/* Procedure */}
-                        <Section id="procedure" title="Procedure">
-                            <GuideProcedure steps={guide.steps} />
-                        </Section>
+                        {/* Adaptive sections (non-procedural document types) */}
+                        {hasSections && guide.sections!.map((sec, i) => (
+                            <Section
+                                key={`section-${i}`}
+                                id={`section-${i}`}
+                                title={sec.title}
+                            >
+                                <GuideSectionCard section={sec} />
+                            </Section>
+                        ))}
+
+                        {/* Procedure — only shown when steps are present */}
+                        {hasSteps && (
+                            <Section id="procedure" title="Procedure">
+                                <GuideProcedure steps={guide.steps} />
+                            </Section>
+                        )}
 
                         {/* Troubleshooting */}
                         {hasTroubleshooting && (
@@ -127,3 +143,4 @@ export function GuideDocument({ guide, session }: GuideDocumentProps) {
         </div>
     );
 }
+

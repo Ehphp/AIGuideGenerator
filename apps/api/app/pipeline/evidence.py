@@ -13,13 +13,23 @@ set produced by ``extract_frames``:
 1. If the step has both ``t_start`` and ``t_end``:
    a. Collect frames inside [t_start, t_end].
    b. If any, return the one closest to ``t_start``.
-2. Fallback: return the frame nearest to ``t_start`` (or ``t_end`` if
+2. Prefer the first frame that comes *after* t_end (within max_nearest_sec × 5
+   seconds).  For navigation / CLICK actions this post-action frame shows the
+   destination state (e.g. the navigated-to page), which is more informative
+   than the transient state captured just before the click.
+3. Fallback: return the frame nearest to ``t_start`` (or ``t_end`` if
    ``t_start`` is absent), provided the distance ≤ ``max_nearest_sec``.
-3. If no suitable frame is found, leave ``frame_keys`` empty and set
+4. If no suitable frame is found, leave ``frame_keys`` empty and set
    ``frame_source = "none"``.
 
-Steps that already have valid ``frame_keys`` are left intact; only
-``frame_source`` is backfilled (to ``"llm"``) if it was previously unset.
+Additionally, if the LLM already assigned a frame that comes *before*
+``t_start`` (a pre-action frame), the deterministic selector above is re-run
+and its result overrides the LLM choice when a better post-action candidate
+exists.
+
+Steps that already have valid ``frame_keys`` pointing to a post-action frame
+(``key_t >= t_start``) are left intact; only ``frame_source`` is backfilled
+(to ``"llm"``) if it was previously unset.
 """
 from __future__ import annotations
 
@@ -111,6 +121,24 @@ def choose_nearest_frame_for_step(
             # Among in-range frames pick the one closest to t_start.
             return min(in_range, key=lambda f: abs(f["t"] - t_start))
 
+    # Rule 4b: prefer the first frame that comes *after* t_end over frames
+    # that precede t_start.  For CLICK / navigation actions the post-action
+    # frame shows the destination state (e.g. the newly-loaded page), which
+    # is more informative than whatever was on screen moments before the
+    # click.  Search window: max_nearest_sec * _POST_CLICK_WINDOW_FACTOR.
+    # Guard: only apply when t_start is known (otherwise there is no clear
+    # "action direction" and the nearest-within-threshold rule is better).
+    # Lowered from x5 to x2 to avoid attaching frames many seconds after the
+    # action that may show a completely different UI state.
+    _POST_CLICK_WINDOW_FACTOR = 2
+    if t_start is not None and t_end is not None:
+        just_after = [
+            f for f in frames
+            if t_end < f["t"] <= t_end + max_nearest_sec * _POST_CLICK_WINDOW_FACTOR
+        ]
+        if just_after:
+            return min(just_after, key=lambda f: f["t"] - t_end)
+
     # Rule 5 / 6 / 7: nearest to t_ref within the configured window.
     nearest = min(frames, key=lambda f: abs(f["t"] - t_ref))
     if abs(nearest["t"] - t_ref) <= max_nearest_sec:
@@ -186,8 +214,31 @@ def attach_missing_click_evidence(
         existing_valid = valid_frame_keys(step.evidence.frame_keys, available_keys)
 
         if existing_valid:
-            # Evidence is already usable; strip any hallucinated keys and tag
-            # the source if not yet set.
+            # Evidence is already usable; strip any hallucinated keys.
+            # However: if the LLM chose a frame that comes *before* the step
+            # starts, re-run the deterministic selector (which now prefers
+            # post-action frames via Rule 4b) and override when it finds a
+            # better candidate.  This handles the common case where the LLM
+            # picks the last frame visible in the timeline before the action
+            # rather than the frame that shows the result of the action.
+            if step.evidence.t_start is not None:
+                llm_ts = next(
+                    (f["t"] for f in valid_frames if f["key"] == existing_valid[0]),
+                    None,
+                )
+                if llm_ts is not None and llm_ts < step.evidence.t_start:
+                    override = choose_nearest_frame_for_step(
+                        step, valid_frames, max_nearest_sec
+                    )
+                    if override and override["key"] != existing_valid[0]:
+                        t_ref = step.evidence.t_start
+                        step.evidence.frame_keys = [override["key"]]
+                        step.evidence.frame_source = "nearest_frame"
+                        step.evidence.frame_distance_sec = round(
+                            abs(override["t"] - t_ref), 3
+                        )
+                        continue
+
             step.evidence.frame_keys = existing_valid
             if step.evidence.frame_source is None:
                 step.evidence.frame_source = "llm"

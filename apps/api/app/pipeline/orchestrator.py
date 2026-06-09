@@ -23,12 +23,16 @@ from app.pipeline.stages import (
     analyze_frames,
     attach_evidence,
     build_timeline,
+    classify_content,
+    extract_actions,
     extract_audio,
     extract_frames,
+    extract_visual_facts,
     generate_guide,
     grounding_validator,
     ingest,
     ocr_frames_local,
+    parse_screens,
     rehydrate_guide,
     sanitize_timeline,
     transcribe,
@@ -88,12 +92,24 @@ async def run(session_id: uuid.UUID) -> None:
         log.info("pipeline: analyze_frames (openai-vision)")
         await _stage("Analyzing frames", analyze_frames.run, provider)
 
+    log.info("pipeline: extract_visual_facts")
+    await _stage("Extracting visual facts", extract_visual_facts.run)
+
+    log.info("pipeline: parse_screens")
+    await _stage("Parsing screens", parse_screens.run)
+
     log.info("pipeline: build_timeline")
     await _stage("Building timeline", build_timeline.run)
 
     if settings.sanitize_enabled:
         log.info("pipeline: sanitize_timeline")
         await _stage("Sanitizing timeline", sanitize_timeline.run)
+
+    log.info("pipeline: classify_content")
+    await _stage("Classifying content", classify_content.run, provider)
+
+    log.info("pipeline: extract_actions")
+    await _stage("Mining actions", extract_actions.run, provider)
 
     log.info("pipeline: generate_guide")
     await _stage("Generating guide", generate_guide.run, provider)

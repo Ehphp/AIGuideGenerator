@@ -57,9 +57,26 @@ function getStageNote(
         return parts.length ? parts.join(" · ") : null;
     }
 
-    // extract_frames: array of { idx, t, key }
-    if (key === "extract_frames" && Array.isArray(artifact)) {
-        return `${artifact.length} frames extracted`;
+    // extract_frames: legacy list [{idx,t,key}] or dict {frames:[...], ...stats}
+    if (key === "extract_frames") {
+        if (Array.isArray(artifact)) {
+            return `${artifact.length} frames extracted`;
+        }
+        if (typeof artifact === "object" && artifact !== null) {
+            const a = artifact as Record<string, unknown>;
+            const count =
+                typeof a.frame_count_final === "number"
+                    ? a.frame_count_final
+                    : Array.isArray(a.frames)
+                        ? (a.frames as unknown[]).length
+                        : null;
+            const parts: string[] = [];
+            if (count !== null) parts.push(`${count} frames`);
+            if (typeof a.frame_max_gap_sec === "number")
+                parts.push(`max gap ${a.frame_max_gap_sec.toFixed(1)}s`);
+            return parts.length ? parts.join(" · ") : null;
+        }
+        return null;
     }
 
     // analyze_frames: array (per-frame, scrubbed)
@@ -225,11 +242,10 @@ export function PipelineStagesTable({ artifacts, events, aiUsage }: Props) {
                             {/* Inline note */}
                             {note && (
                                 <span
-                                    className={`truncate text-xs ${
-                                        isWarning
+                                    className={`truncate text-xs ${isWarning
                                             ? "text-amber-700"
                                             : "text-muted-foreground"
-                                    }`}
+                                        }`}
                                 >
                                     {note}
                                 </span>

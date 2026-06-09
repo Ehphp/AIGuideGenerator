@@ -48,7 +48,9 @@ def _build_repair_prompt(err: str | None, raw_text: str) -> str:
     return (
         "Your previous output failed schema validation. Errors:\n"
         f"{err}\n\n"
-        "Return ONLY a corrected JSON object that matches the Guide v1.0 schema.\n\n"
+        "Return ONLY a corrected JSON object that matches the Guide v1.1 schema.\n"
+        "The key change from v1.0: `steps` is now optional (default []); "
+        "`sections`, `document_type`, and `intended_audience` are new optional fields.\n\n"
         "Previous output:\n```json\n" + raw_text + "\n```\n"
     )
 
@@ -59,6 +61,7 @@ async def _repair_loop_legacy(
     provider: AIProvider,
     raw_text: str,
     err: str | None,
+    max_completion_tokens: int | None = None,
 ) -> Guide:
     repair_prompt = _build_repair_prompt(err, raw_text)
     _egress_repair = {
@@ -69,7 +72,10 @@ async def _repair_loop_legacy(
     }
     common.write_artifact(session.id, "egress_validate_repair", _egress_repair)
     await common.record_stage(db, session, stage="egress_validate_repair", summary=_egress_repair)
-    result = await provider.generate_json(prompt=repair_prompt)
+    result = await provider.generate_json(
+        prompt=repair_prompt,
+        max_completion_tokens=max_completion_tokens,
+    )
     common.write_artifact(
         session.id,
         "validate_guide",
@@ -95,6 +101,7 @@ async def _repair_loop_sanitized(
     provider: AIProvider,
     placeholder_text: str,
     err: str | None,
+    max_completion_tokens: int | None = None,
 ) -> Guide:
     """Repair pass for the sanitize-enabled path.
 
@@ -112,7 +119,10 @@ async def _repair_loop_sanitized(
     }
     common.write_artifact(session.id, "egress_validate_repair", _egress_repair)
     await common.record_stage(db, session, stage="egress_validate_repair", summary=_egress_repair)
-    result = await provider.generate_json(prompt=repair_prompt)
+    result = await provider.generate_json(
+        prompt=repair_prompt,
+        max_completion_tokens=max_completion_tokens,
+    )
 
     redaction_map = _load_redaction_map(session.id)
     rehydrated, stats = rehydrate_text(result.text, redaction_map)
@@ -163,7 +173,8 @@ async def run(db: AsyncSession, session: Session, provider: AIProvider) -> None:
                 err,
             )
             guide = await _repair_loop_sanitized(
-                db, session, provider, placeholder_text, err
+                db, session, provider, placeholder_text, err,
+                max_completion_tokens=settings.openai_validate_guide_max_completion_tokens,
             )
         else:
             common.write_artifact(
@@ -177,7 +188,10 @@ async def run(db: AsyncSession, session: Session, provider: AIProvider) -> None:
         guide, err = _try_parse(raw_text)
         if guide is None:
             log.warning("guide validation failed; attempting one repair pass: %s", err)
-            guide = await _repair_loop_legacy(db, session, provider, raw_text, err)
+            guide = await _repair_loop_legacy(
+                db, session, provider, raw_text, err,
+                max_completion_tokens=settings.openai_validate_guide_max_completion_tokens,
+            )
         else:
             common.write_artifact(
                 session.id, "validate_guide", {"first_error": None, "ok": True}
@@ -198,5 +212,7 @@ async def run(db: AsyncSession, session: Session, provider: AIProvider) -> None:
     summary = {
         "path": common.artifact_storage_key(session.id, "validate_guide"),
         "step_count": len(guide.steps),
+        "section_count": len(guide.sections),
+        "document_type": guide.document_type or "procedural",
     }
     await common.record_stage(db, session, stage="validate_guide", summary=summary)

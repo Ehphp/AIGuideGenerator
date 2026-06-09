@@ -112,13 +112,45 @@ class OpenAIProvider(AIProvider):
             model=settings.openai_vision_model,
         )
 
-    async def generate_json(self, *, prompt: str) -> TextResult:
+    async def generate_json(
+        self,
+        *,
+        prompt: str,
+        max_completion_tokens: int | None = None,
+    ) -> TextResult:
         client = _client()
-        resp = await client.chat.completions.create(
-            model=settings.openai_llm_model,
-            response_format={"type": "json_object"},
-            messages=[{"role": "user", "content": prompt}],
+        # --- Pre-call diagnostic logging ---------------------------------
+        est_input_tokens = max(1, len(prompt) // 4)
+        max_comp = max_completion_tokens if max_completion_tokens is not None else 4096
+        est_total = est_input_tokens + max_comp
+        safe_budget = settings.openai_llm_safe_token_budget
+        log.info(
+            "generate_json pre-call: model=%s est_input_tokens=%d "
+            "max_completion_tokens=%d est_total=%d safe_budget=%d",
+            settings.openai_llm_model,
+            est_input_tokens,
+            max_comp,
+            est_total,
+            safe_budget,
         )
+        if est_total > safe_budget:
+            log.warning(
+                "generate_json: estimated total tokens %d exceeds safe budget %d "
+                "(model=%s) — payload may be too large; consider compressing the "
+                "timeline or reducing max_completion_tokens",
+                est_total,
+                safe_budget,
+                settings.openai_llm_model,
+            )
+        # -----------------------------------------------------------------
+        call_kwargs: dict = {
+            "model": settings.openai_llm_model,
+            "response_format": {"type": "json_object"},
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if max_completion_tokens is not None:
+            call_kwargs["max_tokens"] = max_completion_tokens
+        resp = await client.chat.completions.create(**call_kwargs)
         raw = resp.model_dump() if hasattr(resp, "model_dump") else dict(resp)
         try:
             text = resp.choices[0].message.content or ""

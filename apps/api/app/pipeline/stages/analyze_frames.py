@@ -29,7 +29,8 @@ async def run(db: AsyncSession, session: Session, provider: AIProvider) -> None:
     if common.stage_done(session, "analyze_frames"):
         return
 
-    frames = (session.pipeline_artifacts or {}).get("extract_frames") or []
+    raw = (session.pipeline_artifacts or {}).get("extract_frames") or []
+    frames = raw.get("frames", raw) if isinstance(raw, dict) else raw
     if not isinstance(frames, list) or not frames:
         raise RuntimeError("analyze_frames requires extract_frames to have produced frames")
 

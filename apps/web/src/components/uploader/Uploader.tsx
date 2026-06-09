@@ -11,6 +11,9 @@ export interface UploaderProps {
 
 const ACCEPT_DEFAULT = "video/webm,video/mp4,video/quicktime,video/x-matroska";
 
+// Must match MAX_RECORDING_MB on the backend. Set via NEXT_PUBLIC_MAX_RECORDING_MB env var.
+const MAX_UPLOAD_MB = Number(process.env.NEXT_PUBLIC_MAX_RECORDING_MB ?? "2048");
+
 export function Uploader({
     disabled,
     accept = ACCEPT_DEFAULT,
@@ -30,6 +33,14 @@ export function Uploader({
                 onChange={(e) => {
                     const f = e.target.files?.[0];
                     if (f) {
+                        if (f.size > MAX_UPLOAD_MB * 1024 * 1024) {
+                            alert(
+                                `File too large: ${(f.size / 1024 / 1024).toFixed(0)} MB. ` +
+                                `Maximum allowed: ${MAX_UPLOAD_MB} MB.`,
+                            );
+                            e.target.value = "";
+                            return;
+                        }
                         setName(f.name);
                         setSize(f.size);
                         onPicked(f);

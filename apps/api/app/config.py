@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     storage_dir: str = "/data/storage"
 
     # Limits
-    max_recording_mb: int = 500
+    max_recording_mb: int = 2048
     max_frames: int = 40
 
     # Database
@@ -55,7 +55,7 @@ class Settings(BaseSettings):
 
     # local-ai service (Phase B onwards). Internal-only base URL.
     local_ai_base_url: str = "http://local-ai:9000"
-    local_ai_timeout_seconds: float = 600.0
+    local_ai_timeout_seconds: float = 7200.0
     local_ai_connect_timeout_sec: float = 10.0
 
     # local-ai engine config (Phase C / D).
@@ -85,6 +85,28 @@ class Settings(BaseSettings):
     # Maximum distance (seconds) for the nearest-frame fallback when no frame
     # falls inside the step's [t_start, t_end] range.
     evidence_max_nearest_sec: float = 3.0
+
+    # LLM token budgets.
+    # These control max_tokens per stage and trigger pre-call diagnostic
+    # logging. Reducing max_tokens prevents the single-request TPM error
+    # (input_tokens + max_tokens > TPM_limit) on Tier-1 OpenAI orgs.
+    #
+    # Rule of thumb: OpenAI TPM = tokens per minute *per model*.
+    # gpt-4o Tier-1 limit is 30,000 TPM.  The safe_token_budget should be
+    # set lower than the TPM limit to leave headroom for concurrent calls.
+    openai_llm_safe_token_budget: int = 25000       # warn if est_input+max_output > this
+    openai_classify_max_completion_tokens: int = 400     # tiny JSON output
+    openai_generate_guide_max_completion_tokens: int = 3000
+    openai_validate_guide_max_completion_tokens: int = 3000
+    openai_extract_actions_max_completion_tokens: int = 3000
+
+    # Timeline payload compression.
+    # Applied before every LLM call that receives a full timeline JSON.
+    # Reduces token count by truncating noisy OCR and dropping empty frames.
+    llm_payload_compress: bool = True                # enable/disable
+    llm_compress_max_ocr_chars: int = 300            # max OCR chars per frame
+    llm_compress_max_ui_summary_chars: int = 200     # max ui_summary chars
+    llm_compress_classify_max_frame_events: int = 60 # extra cap for classify
 
     @property
     def cors_origins_list(self) -> list[str]:

@@ -4,17 +4,17 @@ interface GuideTableOfContentsProps {
     guide: Guide;
 }
 
-const SECTION_LABELS: { id: string; label: string }[] = [
+const FIXED_SECTION_LABELS: { id: string; label: string }[] = [
     { id: "overview", label: "Overview" },
     { id: "prerequisites", label: "Prerequisites" },
     { id: "warnings", label: "Warnings" },
-    { id: "procedure", label: "Procedure" },
+    // "procedure" is added dynamically below when steps are present
     { id: "troubleshooting", label: "Troubleshooting" },
     { id: "notes", label: "Notes" },
     { id: "about", label: "About" },
 ];
 
-function isVisible(id: string, guide: Guide): boolean {
+function isFixedVisible(id: string, guide: Guide): boolean {
     switch (id) {
         case "overview":
             return !!guide.summary;
@@ -22,22 +22,23 @@ function isVisible(id: string, guide: Guide): boolean {
             return guide.prerequisites.length > 0 || guide.tools_or_systems.length > 0;
         case "warnings":
             return guide.warnings.length > 0;
-        case "procedure":
-            return guide.steps.length > 0;
         case "troubleshooting":
             return (guide.troubleshooting?.length ?? 0) > 0;
         case "notes":
             return guide.notes.length > 0;
         case "about":
-            return true; // always show about
+            return true;
         default:
             return true;
     }
 }
 
 export function GuideTableOfContents({ guide }: GuideTableOfContentsProps) {
-    const visibleSections = SECTION_LABELS.filter((s) =>
-        isVisible(s.id, guide)
+    const hasSteps = (guide.steps?.length ?? 0) > 0;
+    const hasSections = (guide.sections?.length ?? 0) > 0;
+
+    const visibleFixed = FIXED_SECTION_LABELS.filter((s) =>
+        isFixedVisible(s.id, guide)
     );
 
     return (
@@ -46,7 +47,7 @@ export function GuideTableOfContents({ guide }: GuideTableOfContentsProps) {
                 Contents
             </div>
             <ol className="flex flex-col gap-1">
-                {visibleSections.map((s) => (
+                {visibleFixed.slice(0, 3).map((s) => (
                     <li key={s.id}>
                         <a
                             href={`#${s.id}`}
@@ -57,9 +58,28 @@ export function GuideTableOfContents({ guide }: GuideTableOfContentsProps) {
                     </li>
                 ))}
 
-                {/* Step links under Procedure */}
-                {guide.steps.length > 0 && (
+                {/* Adaptive sections (non-procedural document types) */}
+                {hasSections && guide.sections!.map((sec, i) => (
+                    <li key={`section-${i}`}>
+                        <a
+                            href={`#section-${i}`}
+                            className="block rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                        >
+                            {sec.title}
+                        </a>
+                    </li>
+                ))}
+
+                {/* Procedure section — only when steps present */}
+                {hasSteps && (
                     <li>
+                        <a
+                            href="#procedure"
+                            className="block rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                        >
+                            Procedure
+                        </a>
+                        {/* Step links under Procedure */}
                         <ol className="ml-4 mt-0.5 flex flex-col gap-0.5 border-l border-border pl-2">
                             {guide.steps.map((step, i) => (
                                 <li key={step.id}>
@@ -74,7 +94,19 @@ export function GuideTableOfContents({ guide }: GuideTableOfContentsProps) {
                         </ol>
                     </li>
                 )}
+
+                {visibleFixed.slice(3).map((s) => (
+                    <li key={s.id}>
+                        <a
+                            href={`#${s.id}`}
+                            className="block rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                        >
+                            {s.label}
+                        </a>
+                    </li>
+                ))}
             </ol>
         </nav>
     );
 }
+

@@ -33,7 +33,11 @@ class Settings(BaseSettings):
     ocr_language: str = "eng+ita"
     ocr_lang: str = "eng+ita"
     # Drop OCR blocks below this normalized (0..1) confidence. 0.0 keeps all.
-    ocr_min_confidence: float = 0.0
+    # 0.6 is a good default for Tesseract on screen captures (filters garbage).
+    ocr_min_confidence: float = 0.6
+    # Pre-process screenshots before OCR (grayscale + 2x upscale + binarize).
+    # Dramatically improves Tesseract accuracy on UI screenshots.
+    ocr_preprocess: bool = True
     # Safety cap so a single /ocr request can't pin the worker.
     ocr_max_frames_per_request: int = 200
 

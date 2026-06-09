@@ -16,6 +16,7 @@ import { PipelineStagesTable } from "@/components/session/PipelineStagesTable";
 import { AiUsagePanel } from "@/components/session/AiUsagePanel";
 import { SanitizationPanel } from "@/components/session/SanitizationPanel";
 import { EgressInspectorPanel } from "@/components/session/EgressInspectorPanel";
+import { TranscriptPanel } from "@/components/session/TranscriptPanel";
 
 const STATUS_STYLES: Record<string, string> = {
     created: "bg-muted text-muted-foreground",
@@ -181,22 +182,20 @@ export default function SessionDetailPage() {
                         <button
                             type="button"
                             onClick={() => setActiveTab("pipeline")}
-                            className={`-mb-px px-4 py-2 text-sm transition-colors ${
-                                activeTab === "pipeline"
+                            className={`-mb-px px-4 py-2 text-sm transition-colors ${activeTab === "pipeline"
                                     ? "border-b-2 border-foreground font-medium text-foreground"
                                     : "text-muted-foreground hover:text-foreground"
-                            }`}
+                                }`}
                         >
                             Pipeline / Gestione
                         </button>
                         <button
                             type="button"
                             onClick={() => setActiveTab("guide")}
-                            className={`-mb-px px-4 py-2 text-sm transition-colors ${
-                                activeTab === "guide"
+                            className={`-mb-px px-4 py-2 text-sm transition-colors ${activeTab === "guide"
                                     ? "border-b-2 border-foreground font-medium text-foreground"
                                     : "text-muted-foreground hover:text-foreground"
-                            }`}
+                                }`}
                         >
                             Risultato / Guida
                             {!session.guide_content && (
@@ -278,26 +277,29 @@ export default function SessionDetailPage() {
                                 />
                             )}
 
+                            {/* Transcript viewer — debug view of the full STT output */}
+                            <TranscriptPanel
+                                artifact={
+                                    (session.pipeline_artifacts?.["transcribe"] as
+                                        | { path?: string; language?: string | null; segment_count?: number | null }
+                                        | undefined) ?? null
+                                }
+                            />
+
                             {/* Sanitization diagnostics panel */}
                             {(session.pipeline_artifacts?.["sanitize_timeline"] ||
                                 session.pipeline_artifacts?.["generate_guide"]) && (
-                                <SanitizationPanel
-                                    artifacts={session.pipeline_artifacts ?? {}}
-                                />
-                            )}
+                                    <SanitizationPanel
+                                        artifacts={session.pipeline_artifacts ?? {}}
+                                    />
+                                )}
 
                             {/* Egress inspector — what was actually sent to the AI provider */}
                             {(session.pipeline_artifacts?.["egress_generate_guide"] ||
                                 session.pipeline_artifacts?.["egress_validate_repair"]) && (
-                                <EgressInspectorPanel
-                                    artifacts={session.pipeline_artifacts ?? {}}
-                                />
-                            )}
-
-                            {/* Pipeline event log — collapsed by default, visible after processing */}
-                            {(session.pipeline_events ?? []).length > 0 &&
-                                session.status !== "processing" && (
-                                    <PipelineEventTimeline events={session.pipeline_events} />
+                                    <EgressInspectorPanel
+                                        artifacts={session.pipeline_artifacts ?? {}}
+                                    />
                                 )}
 
                             {/* AI usage diagnostics */}
@@ -356,8 +358,8 @@ export default function SessionDetailPage() {
                                         {session.status === "processing"
                                             ? "The pipeline is still running — check the Pipeline tab for progress."
                                             : session.status === "failed"
-                                              ? "The pipeline failed before a guide could be generated."
-                                              : "No guide has been generated for this session yet."}
+                                                ? "The pipeline failed before a guide could be generated."
+                                                : "No guide has been generated for this session yet."}
                                     </p>
                                 </div>
                             )}
@@ -423,55 +425,6 @@ function PipelineProgress({
                     );
                 })}
             </ol>
-            {events.length > 0 && (
-                <PipelineEventTimeline events={events} compact />
-            )}
-        </div>
-    );
-}
-
-function PipelineEventTimeline({
-    events,
-    compact = false,
-}: {
-    events: PipelineEvent[];
-    compact?: boolean;
-}) {
-    const [open, setOpen] = useState(!compact);
-
-    if (events.length === 0) return null;
-
-    return (
-        <div className={compact ? "mt-4 border-t border-amber-200 pt-3" : "rounded border border-border p-4"}>
-            <button
-                type="button"
-                onClick={() => setOpen((v) => !v)}
-                className={`flex w-full items-center justify-between text-xs font-medium ${compact ? "text-amber-800" : "text-muted-foreground"
-                    }`}
-            >
-                <span>Pipeline events ({events.length})</span>
-                <span>{open ? "▲" : "▼"}</span>
-            </button>
-            {open && (
-                <ol className="mt-2 flex flex-col gap-1">
-                    {events.map((ev, i) => (
-                        <li key={i} className="flex items-start gap-2 text-xs">
-                            <span
-                                className={`mt-0.5 shrink-0 rounded px-1 py-0.5 font-mono ${ev.level === "error"
-                                        ? "bg-red-100 text-red-700"
-                                        : ev.level === "warn"
-                                            ? "bg-yellow-100 text-yellow-700"
-                                            : "bg-muted text-muted-foreground"
-                                    }`}
-                            >
-                                {new Date(ev.t).toLocaleTimeString()}
-                            </span>
-                            <span className="font-medium text-foreground">{ev.stage.replace(/_/g, " ")}</span>
-                            <span className="text-muted-foreground">{ev.message}</span>
-                        </li>
-                    ))}
-                </ol>
-            )}
         </div>
     );
 }

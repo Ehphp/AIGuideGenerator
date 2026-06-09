@@ -30,7 +30,14 @@ async def run(db: AsyncSession, session: Session, provider: AIProvider) -> None:
     if not audio_key:
         raise RuntimeError("transcribe requires extract_audio to have run")
 
-    audio_path = get_storage().local_path(audio_key)
+    # Prefer the compressed M4A when available — extract_audio produces it
+    # when STT_PROVIDER=openai and the WAV would exceed the 25 MB API limit.
+    audio_openai_key = audio_summary.get("audio_openai_key")
+    if audio_openai_key:
+        audio_path = get_storage().local_path(audio_openai_key)
+        log.info("transcribe: using compressed audio (%s)", audio_openai_key)
+    else:
+        audio_path = get_storage().local_path(audio_key)
     language = settings.transcribe_language or None
 
     result = await provider.transcribe(audio_path, language=language)

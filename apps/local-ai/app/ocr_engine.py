@@ -101,8 +101,9 @@ def _tesseract_one(path: Path, frame_key: str, language: str) -> dict[str, Any]:
     try:
         with Image.open(path) as img:
             img.load()
+            processed = _preprocess_for_ocr(img) if settings.ocr_preprocess else img
             data = pytesseract.image_to_data(
-                img,
+                processed,
                 lang=language,
                 output_type=pytesseract.Output.DICT,
             )
@@ -134,6 +135,24 @@ def _tesseract_one(path: Path, frame_key: str, language: str) -> dict[str, Any]:
         "text": full_text,
         "blocks": blocks,
     }
+
+
+def _preprocess_for_ocr(img):
+    """Apply screen-capture-friendly preprocessing for Tesseract.
+
+    Converts to grayscale, upscales 2x with Lanczos resampling, and applies
+    a light contrast stretch. These transformations are well-known to
+    improve Tesseract accuracy on UI screenshots (small text, anti-aliased
+    edges) without slowing inference materially.
+    """
+    try:
+        from PIL import Image, ImageOps  # type: ignore[import-not-found]
+    except ImportError:
+        return img
+    g = img.convert("L")
+    g = g.resize((g.width * 2, g.height * 2), Image.LANCZOS)
+    g = ImageOps.autocontrast(g, cutoff=1)
+    return g
 
 
 def _normalize_tesseract_blocks(data: dict[str, list]) -> list[dict[str, Any]]:
@@ -168,6 +187,11 @@ def _normalize_tesseract_blocks(data: dict[str, list]) -> list[dict[str, Any]]:
             h = int(data["height"][i])
         except (KeyError, ValueError, TypeError):
             continue
+        # Bounding boxes were computed on the 2x-upscaled image; rescale
+        # back to original pixel coordinates so downstream stages
+        # (extract_visual_facts) interpret them correctly.
+        if settings.ocr_preprocess:
+            x //= 2; y //= 2; w //= 2; h //= 2
         out.append(
             {
                 "text": text,

@@ -1,8 +1,10 @@
 """Helpers shared by pipeline stages: artifact paths, AI usage accounting."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,6 +16,95 @@ from app.services import session_service
 from app.storage.local import get_storage
 
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# ffmpeg subprocess helper (used by extract_audio, extract_frames, and future
+# stages that invoke ffmpeg).  Centralised here to avoid duplicating timeout /
+# kill / cleanup logic across stage modules.
+# ---------------------------------------------------------------------------
+
+
+class FfmpegError(RuntimeError):
+    """Raised when an ffmpeg subprocess fails or times out."""
+
+
+async def run_ffmpeg(
+    cmd: list[str],
+    *,
+    timeout_sec: float,
+    cleanup_paths: list[Path] | None = None,
+    error_prefix: str = "ffmpeg",
+) -> bytes:
+    """Run an ffmpeg command with timeout, kill-on-timeout, and cleanup.
+
+    Parameters
+    ----------
+    cmd:
+        Full argv list for the ffmpeg process.
+    timeout_sec:
+        Maximum seconds to wait for the process to finish.
+    cleanup_paths:
+        Files or directories to remove if the run fails or times out.
+        Files are unlinked; directories are removed with shutil.rmtree.
+        Ignored on success — callers are responsible for their own output.
+    error_prefix:
+        Label prepended to error messages (e.g. "ffmpeg scene-detect").
+
+    Returns
+    -------
+    bytes
+        Raw stderr bytes from the process.  Callers that need to parse
+        ffmpeg showinfo output (e.g. ``pts_time``) can use this directly.
+        Callers that do not need it can discard the return value.
+
+    Raises
+    ------
+    FfmpegError
+        On non-zero exit code or timeout.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        _, stderr_bytes = await asyncio.wait_for(
+            proc.communicate(), timeout=timeout_sec
+        )
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except ProcessLookupError:
+            pass
+        _ffmpeg_cleanup(cleanup_paths)
+        raise FfmpegError(
+            f"{error_prefix} timed out after {timeout_sec:.0f}s"
+        )
+
+    if proc.returncode != 0:
+        msg = stderr_bytes.decode(errors="ignore")
+        _ffmpeg_cleanup(cleanup_paths)
+        raise FfmpegError(f"{error_prefix} failed ({proc.returncode}): {msg}")
+
+    return stderr_bytes
+
+
+def _ffmpeg_cleanup(paths: list[Path] | None) -> None:
+    """Remove partial output files or directories after a failed ffmpeg run."""
+    if not paths:
+        return
+    for p in paths:
+        if p is None:
+            continue
+        try:
+            if p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+            elif p.exists():
+                p.unlink()
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +147,15 @@ PUBLIC_STAGE_KEYS: frozenset[str] = frozenset(
         "egress_validate_repair",
         # Phase H: grounding audit (aggregate metrics only; full report on disk).
         "grounding_validator",
+        # Phase I: visual facts extraction (per-frame structured UI data).
+        "extract_visual_facts",
+        # Diagnostic: derived per-frame screen view (parse_screens.json).
+        "parse_screens",
+        # Adaptive pipeline: content classification + routing.
+        "classify_content",
+        # Two-pass generation: action mining (pass 1) + egress audit.
+        "extract_actions",
+        "egress_extract_actions",
     }
 )
 

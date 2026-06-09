@@ -159,18 +159,40 @@ class TestChooseNearestFrame:
         assert chosen is not None
         assert chosen["t"] == 15.0
 
-    def test_no_in_range_nearest_fallback_within_threshold(self):
-        """No frame in range but one within max_nearest_sec of t_start."""
+    def test_no_in_range_prefers_post_action_over_pre_action(self):
+        """Rule 4b: when no frame falls in [t_start, t_end], the first frame
+        after t_end (within max_nearest_sec × 5) is preferred over a
+        pre-action frame that is closer in raw seconds.  This ensures that
+        navigation/CLICK steps show the destination state rather than the
+        transient pre-click state.
+        """
         step = _make_step(t_start=20.0, t_end=25.0)
-        # Nearest outside range: t=18 (distance 2 from t_start=20)
+        # t=18 is 2 s before t_start (pre-action); t=30 is 5 s after t_end (post-action).
+        # Rule 4b fires first and returns the post-action frame.
         frames = _frames(5.0, 18.0, 30.0)
         chosen = choose_nearest_frame_for_step(step, frames, max_nearest_sec=3.0)
         assert chosen is not None
-        assert chosen["t"] == 18.0
+        assert chosen["t"] == 30.0
 
-    def test_no_frame_within_threshold_returns_none(self):
+    def test_no_in_range_post_action_within_window(self):
+        """Rule 4b: only a post-action candidate exists (no frame in range,
+        no pre-action frame within max_nearest_sec).  Returns the post-action
+        frame when it is within max_nearest_sec × 5 past t_end.
+        """
         step = _make_step(t_start=20.0, t_end=25.0)
-        frames = _frames(5.0, 30.0)  # distances: 15 and 10 — both > 3s
+        # t=5 is far (15 s from t_start), t=30 is 5 s post t_end → Rule 4b picks 30.
+        frames = _frames(5.0, 30.0)
+        chosen = choose_nearest_frame_for_step(step, frames, max_nearest_sec=3.0)
+        assert chosen is not None
+        assert chosen["t"] == 30.0
+
+    def test_no_frame_in_range_or_post_window_returns_none(self):
+        """No frame in range, no frame within max_nearest_sec of t_start, and
+        no post-action frame within the 5× window → must return None.
+        """
+        step = _make_step(t_start=20.0, t_end=25.0)
+        # t=5 only — 15 s from t_start, 20 s from t_end; both too far.
+        frames = _frames(5.0)
         chosen = choose_nearest_frame_for_step(step, frames, max_nearest_sec=3.0)
         assert chosen is None
 
@@ -563,3 +585,77 @@ class TestOpacifiedKeyResolution:
         step = _make_step(verb="OPEN")  # no frame_keys
         guide = _make_guide([step])
         assert guide_has_opacified_keys(guide, set()) is False
+
+
+# ---------------------------------------------------------------------------
+# PR4a: backward-compatible extract_frames format (list vs dict)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stage_accepts_extract_frames_as_dict():
+    """attach_evidence works when extract_frames is stored as {frames: [...]}."""
+    from app.pipeline.stages.attach_evidence import run as attach_evidence_run
+
+    sid = str(uuid.uuid4())
+    frame_key = f"sessions/{sid}/frames/frame_0001.jpg"
+
+    guide_content = {
+        "schema_version": "1.0",
+        "title": "T",
+        "summary": "S",
+        "steps": [
+            {
+                "id": "step-1",
+                "order": 1,
+                "title": "T",
+                "description": "D",
+                "actions": [{"verb": "CLICK", "target": "Btn", "value": None}],
+                "evidence": {
+                    "frame_keys": [],
+                    "transcript_excerpt": "",
+                    "t_start": 36.0,
+                    "t_end": 47.0,
+                },
+                "warnings": [],
+                "notes": [],
+                "confidence": 0.6,
+            }
+        ],
+        "warnings": [],
+        "notes": [],
+    }
+
+    session = MagicMock()
+    session.id = sid
+    session.guide_content = guide_content
+    session.pipeline_artifacts = {
+        "extract_frames": {
+            "frames": [
+                {"idx": 0, "t": 34.0, "key": f"sessions/{sid}/frames/frame_0000.jpg"},
+                {"idx": 1, "t": 37.0, "key": frame_key},
+            ]
+        }
+    }
+
+    db = AsyncMock()
+    db.flush = AsyncMock()
+
+    import app.pipeline.common as common_mod
+
+    original_stage_done = common_mod.stage_done
+    original_record_stage = common_mod.record_stage
+
+    common_mod.stage_done = lambda s, name: False
+    common_mod.record_stage = AsyncMock()
+
+    try:
+        await attach_evidence_run(db, session)
+    finally:
+        common_mod.stage_done = original_stage_done
+        common_mod.record_stage = original_record_stage
+
+    updated = session.guide_content
+    step_ev = updated["steps"][0]["evidence"]
+    assert frame_key in step_ev["frame_keys"]
+    assert step_ev["frame_source"] == "nearest_frame"

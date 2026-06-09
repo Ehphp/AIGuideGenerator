@@ -124,8 +124,12 @@ async def test_pipeline_end_to_end_with_fake_provider(tmp_path: Path, monkeypatc
             assert "build_timeline" in artifacts
             assert "generate_guide" in artifacts
             assert "validate_guide" in artifacts
-            frames = artifacts["extract_frames"]
+            ef = artifacts["extract_frames"]
+            # PR4b: extract_frames is now a dict with a "frames" list and stats.
+            assert isinstance(ef, dict), "extract_frames should be a dict (PR4b)"
+            frames = ef["frames"]
             assert isinstance(frames, list) and len(frames) >= 1
+            assert ef["frame_count_final"] == len(frames)
             analyzed = artifacts["analyze_frames"]
             assert len(analyzed) == len(frames)
             usage = s2.ai_usage or {}

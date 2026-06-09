@@ -289,3 +289,82 @@ async def test_orchestrator_does_not_call_vision_provider_when_local(monkeypatch
     await orchestrator._run_analyze_frames(_make_db(), MagicMock(), provider=explosive_provider)
 
     explosive_provider.analyze_frame.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# PR4a: backward-compatible extract_frames format (list vs dict)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_accepts_extract_frames_as_dict(monkeypatch):
+    """extract_frames stored as {frames: [...]} (future dict format) is handled correctly."""
+    from app.pipeline.stages import ocr_frames_local
+
+    sid = uuid.uuid4()
+    keys = [f"sessions/{sid}/frames/frame_0000.jpg"]
+    frames = [{"idx": 0, "t": 0.0, "key": keys[0]}]
+    session = _make_session(artifacts={"extract_frames": {"frames": frames}})
+    db = _make_db()
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.ocr = AsyncMock(return_value=_ocr_response(keys))
+    monkeypatch.setattr(
+        "app.pipeline.stages.ocr_frames_local.LocalAIClient",
+        lambda **kwargs: mock_client,
+    )
+    monkeypatch.setattr("app.pipeline.common.write_artifact", lambda *a, **kw: "x")
+    monkeypatch.setattr("app.pipeline.common.record_stage", AsyncMock())
+    monkeypatch.setattr("app.pipeline.common.add_ai_call", AsyncMock())
+    monkeypatch.setattr(
+        "app.pipeline.common.artifact_storage_key",
+        lambda sid, stage: f"sessions/{sid}/artifacts/{stage}.json",
+    )
+
+    await ocr_frames_local.run(db, session)
+    mock_client.ocr.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# PR4a: analyze_frames — backward-compatible extract_frames format
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_analyze_frames_accepts_extract_frames_as_dict(monkeypatch, tmp_path):
+    """analyze_frames works when extract_frames is stored as {frames: [...]}."""
+    from app.ai.base import FrameAnalysis
+    from app.pipeline.stages import analyze_frames
+
+    sid = uuid.uuid4()
+    key = f"sessions/{sid}/frames/frame_0000.jpg"
+
+    # Create a tiny placeholder image so local_path resolves without crashing.
+    monkeypatch.setattr(
+        "app.pipeline.stages.analyze_frames.get_storage",
+        lambda: type("S", (), {"local_path": staticmethod(lambda k: tmp_path / "frame.jpg")})(),
+    )
+    (tmp_path / "frame.jpg").write_bytes(b"")  # empty file is fine — provider is mocked
+
+    session = MagicMock()
+    session.id = sid
+    session.pipeline_artifacts = {
+        "extract_frames": {"frames": [{"idx": 0, "t": 1.0, "key": key}]}
+    }
+    session.ai_usage = {}
+
+    fake_analysis = FrameAnalysis(ocr_text="hello", ui_summary="UI text: hello", model="gpt-4o")
+    fake_provider = MagicMock()
+    fake_provider.analyze_frame = AsyncMock(return_value=fake_analysis)
+
+    monkeypatch.setattr("app.pipeline.common.stage_done", lambda s, name: False)
+    monkeypatch.setattr("app.pipeline.common.write_artifact", lambda *a, **kw: "x")
+    monkeypatch.setattr("app.pipeline.common.record_stage", AsyncMock())
+    monkeypatch.setattr("app.pipeline.common.add_ai_call", AsyncMock())
+
+    db = MagicMock()
+
+    await analyze_frames.run(db, session, fake_provider)
+    fake_provider.analyze_frame.assert_called_once()

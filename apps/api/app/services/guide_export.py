@@ -123,7 +123,41 @@ def guide_to_docx(
             _add_callout(doc, f"ℹ  {n}")
 
     # -----------------------------------------------------------------------
-    # Procedure — numbered steps
+    # Adaptive sections (non-procedural document types)
+    # -----------------------------------------------------------------------
+    if guide.sections:
+        for section in guide.sections:
+            doc.add_heading(section.title or "Section", level=2)
+
+            if section.content:
+                doc.add_paragraph(section.content)
+
+            if section.items:
+                for item in section.items:
+                    doc.add_paragraph(item, style="List Bullet")
+
+            # Inline procedural steps within a section (e.g. diagnostic resolution)
+            if section.steps:
+                doc.add_heading("Steps", level=3)
+                for step in sorted(section.steps, key=lambda s: s.order):
+                    doc.add_heading(f"Step {step.order} – {step.title}", level=4)
+                    if step.description:
+                        doc.add_paragraph(step.description)
+                    if step.actions:
+                        for action in step.actions:
+                            parts = [action.verb, action.target]
+                            if action.value:
+                                parts.append(f"→ {action.value}")
+                            doc.add_paragraph(" ".join(parts), style="List Bullet")
+
+            for w in (section.warnings or []):
+                _add_callout(doc, f"⚠  {w}")
+
+            for n in (section.notes or []):
+                _add_callout(doc, f"ℹ  {n}")
+
+    # -----------------------------------------------------------------------
+    # Procedure — numbered steps (only when steps are present)
     # -----------------------------------------------------------------------
     if guide.steps:
         doc.add_heading("Procedure", level=2)

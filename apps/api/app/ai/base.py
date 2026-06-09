@@ -56,5 +56,10 @@ class AIProvider(ABC):
     ) -> FrameAnalysis: ...
 
     @abstractmethod
-    async def generate_json(self, *, prompt: str) -> TextResult:
+    async def generate_json(
+        self,
+        *,
+        prompt: str,
+        max_completion_tokens: int | None = None,
+    ) -> TextResult:
         """LLM call returning a JSON-formatted text payload."""

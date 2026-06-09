@@ -7,7 +7,6 @@ Then perceptual-hash dedup, capped at MAX_FRAMES.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 import shutil
@@ -25,11 +24,9 @@ from app.storage.local import get_storage
 log = logging.getLogger(__name__)
 
 
-class FfmpegError(RuntimeError):
-    pass
-
-
-async def _ffmpeg_extract_scene(src: Path, out_dir: Path, threshold: float) -> list[tuple[float, Path]]:
+async def _ffmpeg_extract_scene(
+    src: Path, out_dir: Path, threshold: float, timeout_sec: float
+) -> list[tuple[float, Path]]:
     """Returns list of (timestamp_sec, path)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     pattern = str(out_dir / "scene_%05d.jpg")
@@ -44,17 +41,16 @@ async def _ffmpeg_extract_scene(src: Path, out_dir: Path, threshold: float) -> l
         "-q:v", "3",
         pattern,
     ]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    stderr_bytes = await common.run_ffmpeg(
+        cmd,
+        timeout_sec=timeout_sec,
+        cleanup_paths=[out_dir],
+        error_prefix="ffmpeg scene-detect",
     )
-    _, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        msg = stderr.decode(errors="ignore")
-        raise FfmpegError(f"ffmpeg scene-detect failed ({proc.returncode}): {msg}")
 
     # Parse pts_time:N.NNN from showinfo lines.
     times: list[float] = []
-    for m in re.finditer(rb"pts_time:([0-9.]+)", stderr):
+    for m in re.finditer(rb"pts_time:([0-9.]+)", stderr_bytes):
         try:
             times.append(float(m.group(1)))
         except ValueError:
@@ -69,7 +65,7 @@ async def _ffmpeg_extract_scene(src: Path, out_dir: Path, threshold: float) -> l
 
 
 async def _ffmpeg_extract_uniform(
-    src: Path, out_dir: Path, interval_sec: float
+    src: Path, out_dir: Path, interval_sec: float, timeout_sec: float
 ) -> list[tuple[float, Path]]:
     out_dir.mkdir(parents=True, exist_ok=True)
     pattern = str(out_dir / "u_%05d.jpg")
@@ -83,13 +79,12 @@ async def _ffmpeg_extract_uniform(
         "-q:v", "3",
         pattern,
     ]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    await common.run_ffmpeg(
+        cmd,
+        timeout_sec=timeout_sec,
+        cleanup_paths=[out_dir],
+        error_prefix="ffmpeg uniform-sampling",
     )
-    _, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        msg = stderr.decode(errors="ignore")
-        raise FfmpegError(f"ffmpeg uniform sampling failed ({proc.returncode}): {msg}")
     files = sorted(out_dir.glob("u_*.jpg"))
     return [(i * interval_sec, f) for i, f in enumerate(files)]
 
@@ -127,44 +122,74 @@ async def run(db: AsyncSession, session: Session) -> None:
     if work_root.exists():
         shutil.rmtree(work_root, ignore_errors=True)
 
+    # Timeout: at least 5 min, or 2.5× the recorded duration (same as extract_audio).
+    # Applied independently to each ffmpeg pass.
+    _duration = session.media_duration_sec or 1200.0
+    _ffmpeg_timeout = max(300.0, _duration * 2.5)
+
     scene_dir = work_root / "scene"
     uniform_dir = work_root / "uniform"
 
-    scene_pairs: list[tuple[float, Path]] = []
-    try:
-        scene_pairs = await _ffmpeg_extract_scene(
-            src, scene_dir, settings.frames_scene_threshold
-        )
-    except FfmpegError as e:
-        log.warning("scene-detect failed, continuing with uniform only: %s", e)
-
-    uniform_pairs = await _ffmpeg_extract_uniform(
-        src, uniform_dir, settings.frames_uniform_interval_sec
-    )
-
-    # Merge & sort by timestamp.
-    merged = sorted(scene_pairs + uniform_pairs, key=lambda x: x[0])
-    deduped = _phash_dedup(merged, settings.frames_phash_distance)
-    capped = deduped[: settings.max_frames]
-
-    # Move kept frames into final location with stable names.
-    final_dir = common.session_dir(session.id) / "frames"
-    if final_dir.exists():
-        shutil.rmtree(final_dir, ignore_errors=True)
-    final_dir.mkdir(parents=True, exist_ok=True)
-
     final_frames: list[dict] = []
-    for idx, (t, src_path) in enumerate(capped):
-        name = f"frame_{idx:04d}.jpg"
-        dst = final_dir / name
-        shutil.copyfile(src_path, dst)
-        key = f"sessions/{session.id}/frames/{name}"
-        final_frames.append({"idx": idx, "t": float(t), "key": key})
+    _count_raw_scene = 0
+    _count_raw_uniform = 0
+    _count_after_dedup = 0
+    try:
+        scene_pairs: list[tuple[float, Path]] = []
+        try:
+            scene_pairs = await _ffmpeg_extract_scene(
+                src, scene_dir, settings.frames_scene_threshold, _ffmpeg_timeout
+            )
+        except common.FfmpegError as e:
+            log.warning("scene-detect failed, continuing with uniform only: %s", e)
+        _count_raw_scene = len(scene_pairs)
 
-    # Cleanup work dir.
-    shutil.rmtree(work_root, ignore_errors=True)
+        uniform_pairs = await _ffmpeg_extract_uniform(
+            src, uniform_dir, settings.frames_uniform_interval_sec, _ffmpeg_timeout
+        )
+        _count_raw_uniform = len(uniform_pairs)
 
-    summary = final_frames  # array of {idx,t,key}
+        # Merge & sort by timestamp.
+        merged = sorted(scene_pairs + uniform_pairs, key=lambda x: x[0])
+        deduped = _phash_dedup(merged, settings.frames_phash_distance)
+        _count_after_dedup = len(deduped)
+        capped = deduped[: settings.max_frames]
+
+        # Move kept frames into final location with stable names.
+        final_dir = common.session_dir(session.id) / "frames"
+        if final_dir.exists():
+            shutil.rmtree(final_dir, ignore_errors=True)
+        final_dir.mkdir(parents=True, exist_ok=True)
+
+        for idx, (t, src_path) in enumerate(capped):
+            name = f"frame_{idx:04d}.jpg"
+            dst = final_dir / name
+            shutil.copyfile(src_path, dst)
+            key = f"sessions/{session.id}/frames/{name}"
+            final_frames.append({"idx": idx, "t": float(t), "key": key})
+
+    finally:
+        # Always clean up the temporary working directory, whether we succeeded
+        # or failed.  On success the frames have already been copied to final_dir.
+        shutil.rmtree(work_root, ignore_errors=True)
+
+    _times = [f["t"] for f in final_frames]
+    _gaps = (
+        [_times[i + 1] - _times[i] for i in range(len(_times) - 1)]
+        if len(_times) >= 2
+        else []
+    )
+    summary: dict = {
+        "frames": final_frames,
+        "frame_count_raw_scene": _count_raw_scene,
+        "frame_count_raw_uniform": _count_raw_uniform,
+        "frame_count_after_dedup": _count_after_dedup,
+        "frame_count_final": len(final_frames),
+        "frame_t_min": _times[0] if _times else None,
+        "frame_t_max": _times[-1] if _times else None,
+        "frame_max_gap_sec": max(_gaps) if _gaps else None,
+        "frame_mean_gap_sec": sum(_gaps) / len(_gaps) if _gaps else None,
+    }
     await common.record_stage(
         db,
         session,

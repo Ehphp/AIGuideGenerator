@@ -474,6 +474,59 @@ async def run(db: AsyncSession, session: Session) -> None:
     events: list[dict] = timeline.get("events") or []
     guide = Guide.model_validate(session.guide_content)
 
+    # ------------------------------------------------------------------
+    # Non-procedural short-circuit: if the document has no steps (e.g., a
+    # technical or conceptual doc), UI-action grounding is not meaningful.
+    # Record a clear marker and exit without producing misleading metrics.
+    # ------------------------------------------------------------------
+    if not guide.steps:
+        doc_type = guide.document_type or "unknown"
+        skipped_summary: dict[str, Any] = {
+            "path": common.artifact_storage_key(session.id, "guide_grounding_report"),
+            "grounding_skipped": True,
+            "reason": "no_steps",
+            "document_type": doc_type,
+            # Zero-valued metrics so consumers that read these fields don't break.
+            "strict_visual_grounding_rate": 0.0,
+            "weak_visual_grounding_rate": 0.0,
+            "visual_grounding_rate": 0.0,
+            "audio_dependency_score": 0.0,
+            "unverified_action_rate": 0.0,
+            "target_verification_rate": 0.0,
+            "generic_target_rate": 0.0,
+            "possible_temporal_miss_rate": 0.0,
+            "visual_candidate_count": 0,
+            "step_source_distribution": {},
+            "steps_needing_review": 0,
+            "total_steps": 0,
+            "total_actions": 0,
+        }
+        skipped_report: dict[str, Any] = {
+            "schema_version": "1.1",
+            "session_id": str(session.id),
+            "grounding_skipped": True,
+            "reason": "no_steps — document_type is non-procedural",
+            "document_type": doc_type,
+            "summary": skipped_summary,
+            "steps": [],
+        }
+        common.write_artifact(session.id, "guide_grounding_report", skipped_report)
+        await common.record_stage(
+            db,
+            session,
+            stage="grounding_validator",
+            summary=skipped_summary,
+            message=(
+                f"grounding_validator: skipped (document_type={doc_type}, no steps to ground)"
+            ),
+        )
+        log.info(
+            "grounding_validator: skipped — document_type=%s, no steps (session=%s)",
+            doc_type,
+            session.id,
+        )
+        return
+
     step_reports: list[dict] = []
     for step in guide.steps:
         report = _classify_step(step.model_dump(), events)

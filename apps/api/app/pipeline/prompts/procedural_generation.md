@@ -57,12 +57,72 @@ Hard constraints:
   from the first event that belongs to the actual target procedure.
 - If something is unclear or absent from the timeline, add a warning instead
   of inventing a plausible step.
+- An ACTION_LIST block may follow the TIMELINE block. It contains atomic
+  actions already mined from the same timeline. Treat each entry in
+  ACTION_LIST with `confidence >= 0.5` as a RECALL FLOOR: it must appear in
+  at least one step (either as the step's own action or explicitly listed in
+  an adjacent step's `actions[]`). You may freely add steps that are not in
+  ACTION_LIST when the timeline supports them, but you must NOT silently
+  drop a mined high-confidence action. When using a mined action, prefer its
+  `target` and `value` as the step's action target/value, and copy its
+  `transcript_excerpt` and `frame_keys` into the step's evidence.
+
+Coverage requirements (CRITICAL — read carefully):
+- This is a comprehensive step-by-step reproduction guide, NOT an executive
+  summary. Your job is to reconstruct every concrete operational action the
+  user performs in the recording so a reader can replay it end-to-end.
+- Step density target: produce roughly ONE step per 60–120 seconds of
+  substantive timeline activity. A 5-minute procedural recording should
+  yield 4–8 steps, a 10-minute one 8–15 steps, a 20-minute one 15–25 steps.
+  Outputs with only 2–3 steps for recordings longer than 5 minutes are
+  considered a failure of this task.
+- Every transcript segment containing an imperative or operational verb in
+  the recording language (open/click/type/run/install/configure/create/
+  save/check/verify/edit/select/copy/paste/close/restart/apri/clicca/
+  scrivi/esegui/installa/configura/crea/salva/verifica/modifica/seleziona/
+  copia/incolla/chiudi/riavvia/…) MUST either become its own step or be
+  explicitly covered inside an adjacent step whose `description` mentions
+  that action.
+- Whenever a frame event at time T shows a distinct UI interaction (button
+  click, form input, terminal command, navigation between tabs/panes) and
+  no current step covers a window around T, create a new step for it.
+- It is acceptable to skip the first/last ~5% of the timeline if it is
+  framing or chitchat with no concrete action. Everything between, when it
+  contains a verb-target pair anchored in the timeline, belongs in the guide.
+- One step = one atomic, replayable action. Do NOT merge multiple distinct
+  actions into one step: "Open the terminal and run docker compose up"
+  must become TWO steps (one OPEN, one RUN). Same for compound transcript
+  segments like "configura il file .env e poi avvia i container" → two steps.
+
+Forbidden output patterns (these indicate the model is over-summarising and
+should be avoided):
+- A `steps` array with fewer than 4 entries when the timeline spans more
+  than ~5 minutes of substantive procedural content.
+- Generic, non-evidenced prerequisites or warnings such as "X must be
+  installed" / "Ensure all dependencies are installed" when installation
+  is never discussed or shown in the timeline. Prerequisites and warnings
+  must be anchored to specific timeline events.
+- Step descriptions that lump together more than one verb-target pair
+  ("Open and configure and run …").
+- `transcript_excerpt` fields that are vague filler ("Ok", "vai", "si")
+  when richer, more descriptive adjacent transcript text is available.
+- Two or three high-level meta-steps ("Setup environment", "Run application")
+  in place of the concrete sequence of operations the user actually performed.
 
 Guidelines:
 - Steps must be in execution order; assign monotonically increasing `order` and
   ids `step-1`, `step-2`, ...
 - Pull evidence frame_keys verbatim from the timeline events.
 - Prefer concise, imperative descriptions ("Click Save", not "The user clicks Save").
+- Granularity bias: when in doubt between producing one combined step or two
+  separate steps, ALWAYS prefer two steps. It is far better to be slightly
+  too granular than to drop or merge actions.
+- Cover the full timeline span: the `t_start` of your first step and the
+  `t_end` of your last step should together span most of the substantive
+  procedural portion of the recording. Large unexplained gaps (> 3 minutes
+  with no step) between adjacent steps suggest missing coverage — add steps
+  or document the gap with a `notes` entry explaining why nothing happens
+  there.
 - Use this action vocabulary and keep `actions[*].verb` in UPPERCASE:
   OPEN, NAVIGATE, CLICK, TYPE, SELECT, CONFIRM, WAIT, DOWNLOAD, UPLOAD,
   SCROLL, VERIFY, COPY, PASTE, CLOSE.

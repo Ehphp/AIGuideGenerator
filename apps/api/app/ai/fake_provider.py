@@ -39,7 +39,12 @@ class FakeAIProvider(AIProvider):
             model="fake-vision",
         )
 
-    async def generate_json(self, *, prompt: str) -> TextResult:
+    async def generate_json(
+        self,
+        *,
+        prompt: str,
+        max_completion_tokens: int | None = None,  # noqa: ARG002 — unused in stub
+    ) -> TextResult:
         # Build a minimal valid Guide JSON deterministically.
         guide = {
             "schema_version": "1.0",

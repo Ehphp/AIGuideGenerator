@@ -73,7 +73,7 @@ services:
       OCR_PROVIDER: ${OCR_PROVIDER:-openai}
       GUIDE_LLM_PROVIDER: ${GUIDE_LLM_PROVIDER:-openai}
       LOCAL_AI_BASE_URL: ${LOCAL_AI_BASE_URL:-http://local-ai:9000}
-      LOCAL_AI_TIMEOUT_SECONDS: ${LOCAL_AI_TIMEOUT_SECONDS:-600}
+      LOCAL_AI_TIMEOUT_SECONDS: ${LOCAL_AI_TIMEOUT_SECONDS:-1800}
       # Phase E: sanitizer
       SANITIZE_ENABLED: ${SANITIZE_ENABLED:-false}
       SANITIZE_STRICT_MODE: ${SANITIZE_STRICT_MODE:-false}
@@ -125,6 +125,7 @@ services:
     command: npm run dev
     environment:
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
+      NEXT_PUBLIC_MAX_RECORDING_MB: ${NEXT_PUBLIC_MAX_RECORDING_MB:-2048}
       NODE_ENV: development
     ports:
       - "3000:3000"
